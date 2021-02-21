@@ -426,6 +426,9 @@ int CloudService::send(const char *event,
 int CloudService::send(PublishFlags publish_flags, CloudServicePublishFlags cloud_flags, cloud_service_send_cb_t cb, unsigned int timeout_ms, const void *context)
 {
     int rval = 0;
+    // NOTE: if this JSON object close code changes then estimatedEndCommandSize() must be updated.
+    // The general pattern is:
+    //       ,\"req_id\":0000000000}
     uint32_t req_id = (cb && (cloud_flags & CloudServicePublishFlags::FULL_ACK)) ? get_next_req_id() : 0;
 
     if(req_id)
