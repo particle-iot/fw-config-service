@@ -39,7 +39,7 @@ using namespace std::placeholders;
 
 #include "background_publish.h"
 
-enum CloudServiceStatus {
+enum class CloudServiceStatus {
     SUCCESS = 0,
     FAILURE, // publish to Particle cloud failed, etc
     TIMEOUT, // waiting for application response, etc
