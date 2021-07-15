@@ -491,6 +491,7 @@ int ConfigService::_load(config_service_desc_t &config_desc)
     }
 
     char *json = (char *) malloc(st.st_size);
+    memset(json, 0, st.st_size);
 
     if(!json)
     {

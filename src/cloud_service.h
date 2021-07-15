@@ -159,6 +159,9 @@ class CloudService
             uint32_t req_id=0,
             uint32_t timeout_ms=0,
             const void *context=nullptr);
+
+        bool idle() { return background_publish.idle(); }
+
     private:
         CloudService();
         static CloudService *_instance;

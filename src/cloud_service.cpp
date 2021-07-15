@@ -116,7 +116,7 @@ int CloudService::regCommandCallback(const char *cmd, cloud_service_cb_t cb, uin
 
 static int _get_common_fields(JSONValue &root, const char **cmd, const char **src_cmd, uint32_t *req_id, uint32_t *timestamp)
 {
-    int rval = -EINVAL;
+    int rval = 0;
 
     // iterate and peel out necessary fields for command dispatching
     JSONObjectIterator it(root);
