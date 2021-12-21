@@ -812,7 +812,7 @@ int config_write_json(ConfigNode *root, JSONWriter &writer)
             error = reinterpret_cast<ConfigFloat *>(root)->get(value);
             if(!error)
             {
-                writer.name(root->name()).value(value);
+                writer.name(root->name()).value(value, 10); // !!! TODO !!! temporary fix
             }
             break;
         }
