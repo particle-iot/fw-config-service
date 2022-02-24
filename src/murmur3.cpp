@@ -149,27 +149,39 @@ void murmur3_hash_finalize(murmur3_hash_t &hash)
     switch(hash.accum_len & 15)
     {
     case 15: k4 ^= tail[14] << 16;
+            // fall through
     case 14: k4 ^= tail[13] << 8;
+            // fall through
     case 13: k4 ^= tail[12] << 0;
             k4 *= c4; k4  = rotl32(k4,18); k4 *= c1; hash.h[3] ^= k4;
-
+            // fall through
     case 12: k3 ^= tail[11] << 24;
+            // fall through
     case 11: k3 ^= tail[10] << 16;
+            // fall through
     case 10: k3 ^= tail[ 9] << 8;
+            // fall through
     case  9: k3 ^= tail[ 8] << 0;
             k3 *= c3; k3  = rotl32(k3,17); k3 *= c4; hash.h[2] ^= k3;
-
+            // fall through
     case  8: k2 ^= tail[ 7] << 24;
+            // fall through
     case  7: k2 ^= tail[ 6] << 16;
+            // fall through
     case  6: k2 ^= tail[ 5] << 8;
+            // fall through
     case  5: k2 ^= tail[ 4] << 0;
             k2 *= c2; k2  = rotl32(k2,16); k2 *= c3; hash.h[1] ^= k2;
-
+            // fall through
     case  4: k1 ^= tail[ 3] << 24;
+        // fall through
     case  3: k1 ^= tail[ 2] << 16;
+            // fall through
     case  2: k1 ^= tail[ 1] << 8;
+            // fall through
     case  1: k1 ^= tail[ 0] << 0;
             k1 *= c1; k1  = rotl32(k1,15); k1 *= c2; hash.h[0] ^= k1;
+            // fall through
     };
 
     hash.h[0] ^= hash.accum_len; hash.h[1] ^= hash.accum_len; hash.h[2] ^= hash.accum_len; hash.h[3] ^= hash.accum_len;
