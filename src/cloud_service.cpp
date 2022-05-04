@@ -18,7 +18,7 @@
 
 #include "cloud_service.h"
 
-#include "background_publish.h"
+#include "LocationPublish.h"
 
 #include <string.h>
 
@@ -32,7 +32,7 @@ CloudService::CloudService() :
 void CloudService::init()
 {
     Particle.function("cmd", &CloudService::dispatchCommand, this);
-    background_publish.start();
+    BackgroundPublish::instance().init();
 }
 
 void CloudService::tick()
@@ -112,6 +112,13 @@ int CloudService::regCommandCallback(const char *cmd, cloud_service_cb_t cb, uin
     handlers.push_front(handler);
 
     return 0;
+}
+
+void CloudService::regCommandDeferredCallback(const cloud_service_handler_t &handler)
+{
+    std::lock_guard<RecursiveMutex> lg(mutex);
+
+    deferred_handlers.push_front(handler);
 }
 
 static int _get_common_fields(JSONValue &root, const char **cmd, const char **src_cmd, uint32_t *req_id, uint32_t *timestamp)
@@ -296,41 +303,6 @@ int CloudService::send_cb_wrapper(CloudServiceStatus status, JSONValue *rsp_root
     return rval;
 }
 
-void CloudService::publish_cb(
-    publish_status_t status,
-    const char *event_name,
-    const char *event_data,
-    const void *event_context)
-{
-    std::lock_guard<RecursiveMutex> lg(mutex);
-
-    if(!event_context)
-    {
-        return;
-    }
-
-    cloud_service_handler_t &handler = ((cloud_service_send_handler_t *) event_context)->base_handler;
-
-    if(status == BACKGROUND_PUBLISH_STATUS_SUCCESS)
-    {
-        if(handler.cloud_flags & CloudServicePublishFlags::FULL_ACK)
-        {
-            // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
-            regCommandCallback(handler.cmd, handler.cb, handler.req_id, handler.timeout_ms, handler.context);
-        }
-        else
-        {
-            handler.status = CloudServiceStatus::SUCCESS;
-            deferred_handlers.push_front(handler);
-        }
-    }
-    else
-    {
-        handler.status = CloudServiceStatus::FAILURE;
-        deferred_handlers.push_front(handler);
-    }
-}
-
 int CloudService::send(const char *event,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
@@ -338,7 +310,8 @@ int CloudService::send(const char *event,
     unsigned int timeout_ms,
     const void *context,
     const char *event_name,
-    uint32_t req_id)
+    uint32_t req_id,
+    int level)
 {
     int rval = 0;
     size_t event_len = strlen(event);
@@ -354,6 +327,7 @@ int CloudService::send(const char *event,
 
         if(!event_name)
         {
+            Log.info("Event Name failed: %s", event);
             return -EINVAL;
         }
     }    
@@ -363,7 +337,7 @@ int CloudService::send(const char *event,
     // much simpler if there is no callback and can just publish into the void
     if(!cb)
     {
-        if(!background_publish.publish(_writer_event_name, event))
+        if(!LocationPublish::instance().publish(_writer_event_name, event, PRIVATE, level))
         {
             rval = -EBUSY;
         }
@@ -408,7 +382,8 @@ int CloudService::send(const char *event,
         send_handler->cb = cb;
         send_handler->context = context;
         send_handler->req_data = event;
-        if(!background_publish.publish(_writer_event_name, event, publish_flags | PRIVATE, &CloudService::publish_cb, this, send_handler))
+        if(!LocationPublish::instance().publish(_writer_event_name, event, 
+                                    publish_flags | PRIVATE, level, send_handler))
         {
             delete send_handler;
             rval = -EBUSY;
@@ -423,7 +398,12 @@ int CloudService::send(const char *event,
     return rval;
 }
 
-int CloudService::send(PublishFlags publish_flags, CloudServicePublishFlags cloud_flags, cloud_service_send_cb_t cb, unsigned int timeout_ms, const void *context)
+int CloudService::send(PublishFlags publish_flags, 
+                    CloudServicePublishFlags cloud_flags, 
+                    cloud_service_send_cb_t cb, 
+                    unsigned int timeout_ms, 
+                    const void *context, 
+                    int level)
 {
     int rval = 0;
     // NOTE: if this JSON object close code changes then estimatedEndCommandSize() must be updated.
@@ -448,7 +428,7 @@ int CloudService::send(PublishFlags publish_flags, CloudServicePublishFlags clou
     // ensure null termination of the output json
     writer().buffer()[writer().dataSize()] = '\0';
 
-    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, context, _writer_event_name, req_id);
+    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, context, _writer_event_name, req_id, level);
 
     unlock();
     return rval;
