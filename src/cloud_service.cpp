@@ -197,6 +197,28 @@ static int _get_common_fields(JSONValue &root, const char **cmd, const char **sr
 int CloudService::dispatchCommand(String data)
 {
     Log.info("cloud received: %s", data.c_str());
+
+    // Perform initial validation
+    const char *jsonStr = data.c_str();
+    char * ptr;
+    int    delimiter = ':';
+    ptr = strchr( jsonStr, delimiter );
+    while( nullptr != ptr )
+    {
+        // 
+        // A properly formatted JSON should be:
+        // {"cmd":"xxx"}
+        // Check if the preceding character to the [:] is the ["] termination in the <key, value> pair
+        //
+        if( *(ptr-1) != '"')
+        {
+            // Improperly formed command
+            return -EINVAL;
+        }
+
+        ptr = strchr( ptr+1, delimiter );
+    }
+    
     JSONValue root = JSONValue::parseCopy(data, data.length());
     int rval = -ENOENT;
 
