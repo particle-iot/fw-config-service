@@ -17,6 +17,7 @@
 #pragma once
 
 #include "Particle.h"
+#include "BackgroundPublish.h"
 
 #define CLOUD_KEY_CMD "cmd"
 #define CLOUD_KEY_TIME "time"
@@ -32,7 +33,8 @@
 
 #define CLOUD_DEFAULT_TIMEOUT_MS (10000)
 
-#include <vector>
+#include <cstddef>
+#include <functional>
 #include <list>
 
 using namespace std::placeholders;
@@ -110,7 +112,7 @@ class CloudService
             cloud_service_send_cb_t cb=nullptr,
             unsigned int timeout_ms=0,
             const void *context=nullptr,
-            int level=0);
+            std::size_t priority=0u);
 
         template <typename T>
         int send(PublishFlags publish_flags = PRIVATE,
@@ -119,7 +121,7 @@ class CloudService
             T *instance=nullptr,
             uint32_t timeout_ms=0,
             const void *context=nullptr,
-            int level=0);
+            std::size_t priority=0u);
 
         int send(const char *event,
             PublishFlags publish_flags = PRIVATE,
@@ -129,7 +131,7 @@ class CloudService
             const void *context=nullptr,
             const char *event_name=nullptr,
             uint32_t req_id=0,
-            int level=0);
+            std::size_t priority=0u);
 
         template <typename T>
         int send(const char *event,
@@ -141,7 +143,7 @@ class CloudService
             const void *context=nullptr,
             const char *event_name=nullptr,
             uint32_t req_id=0,
-            int level=0);
+            std::size_t priority=0u);
 
         int sendAck(JSONValue &root, int status);
 
@@ -163,11 +165,18 @@ class CloudService
             uint32_t timeout_ms=0,
             const void *context=nullptr);
 
-        void regCommandDeferredCallback(const cloud_service_handler_t &handler);
-
     private:
         CloudService();
         static CloudService *_instance;
+
+        BackgroundPublish<> background_publish;
+
+        // internal callback for non-blocking publish on the send path
+        void publish_cb(
+            particle::Error status,
+            const char *event_name,
+            const char *event_data,
+            const void *event_context);
 
         // internal callback wrapper on the send path
         static int send_cb_wrapper(CloudServiceStatus status,
@@ -218,9 +227,9 @@ int CloudService::send(PublishFlags publish_flags,
     T *instance,
     uint32_t timeout_ms,
     const void *context,
-    int level)
+    std::size_t priority)
 {
-    return send(publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, level);
+    return send(publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, priority);
 }
 
 
@@ -234,9 +243,9 @@ int CloudService::send(const char *event,
     const void *context,
     const char *event_name,
     uint32_t req_id,
-    int level)
+    std::size_t priority)
 {
-    return send(event, publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, event_name, req_id, level);
+    return send(event, publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, event_name, req_id, priority);
 }
 
 void log_json(const char *json, size_t size);
