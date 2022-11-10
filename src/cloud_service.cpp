@@ -310,7 +310,7 @@ void CloudService::publish_cb(
 
     cloud_service_handler_t &handler = ((cloud_service_send_handler_t *) event_context)->base_handler;
 
-    if(error == Error::NONE) {
+    if(Error::NONE == error) {
         if(handler.cloud_flags & CloudServicePublishFlags::FULL_ACK) {
             // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
             regCommandCallback(handler.cmd, handler.cb, handler.req_id, handler.timeout_ms, handler.context);
