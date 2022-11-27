@@ -195,7 +195,7 @@ class CloudService
         uint32_t last_tick_sec;
 
         std::list<cloud_service_handler_t> handlers;
-        std::list<cloud_service_handler_t> deferred_handlers;
+        std::list<std::function<int()>> deferred_handlers;
 
         RecursiveMutex mutex;
 };

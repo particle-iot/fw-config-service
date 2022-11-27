@@ -48,7 +48,7 @@ void CloudService::tick()
 
     for(auto handler : deferred_handlers)
     {
-        handler.cb(handler.status, nullptr, handler.context);
+        handler();
     }
     deferred_handlers.clear();
 }
@@ -304,10 +304,6 @@ void CloudService::publish_cb(
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
-    if(!event_context) {
-        return;
-    }
-
     cloud_service_handler_t &handler = ((cloud_service_send_handler_t *) event_context)->base_handler;
 
     if(error == Error::NONE) {
@@ -315,12 +311,10 @@ void CloudService::publish_cb(
             // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
             regCommandCallback(handler.cmd, handler.cb, handler.req_id, handler.timeout_ms, handler.context);
         } else {
-            handler.status = CloudServiceStatus::SUCCESS;
-            deferred_handlers.push_front(handler);
+            deferred_handlers.push_front(std::bind(&CloudService::send_cb_wrapper, CloudServiceStatus::SUCCESS, nullptr, event_context));
         }
     } else {
-        handler.status = CloudServiceStatus::FAILURE;
-        deferred_handlers.push_front(handler);
+        deferred_handlers.push_front(std::bind(&CloudService::send_cb_wrapper, CloudServiceStatus::FAILURE, nullptr, event_context));
     }
 }
 
@@ -399,7 +393,7 @@ int CloudService::send(const char *data,
 
     send_handler->cb = cb;
     send_handler->context = context;
-    send_handler->req_data = data;
+    send_handler->req_data = data; // big copy
     if(!background_publish.publish<CloudService, const void *>(_writer_event_name, data,
                                    publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, send_handler))
     {
