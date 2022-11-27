@@ -324,7 +324,7 @@ void CloudService::publish_cb(
     }
 }
 
-int CloudService::send(const char *event,
+int CloudService::send(const char *data,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
     cloud_service_send_cb_t cb,
@@ -335,7 +335,7 @@ int CloudService::send(const char *event,
     std::size_t priority)
 {
     int rval = 0;
-    size_t event_len = strlen(event);
+    size_t data_len = strlen(data);
     std::lock_guard<RecursiveMutex> lg(mutex);
 
     if(!event_name ||
@@ -343,12 +343,12 @@ int CloudService::send(const char *event,
     {
         // should have request id or event name but it wasn't passed in
         // extract from event
-        JSONValue root = JSONValue::parseCopy(event, event_len);
+        JSONValue root = JSONValue::parseCopy(data, data_len);
         _get_common_fields(root, &event_name, nullptr, &req_id, nullptr);
 
         if(!event_name)
         {
-            Log.info("Event Name failed: %s", event);
+            Log.info("Event Name failed: %s", data);
             return -EINVAL;
         }
     }    
@@ -358,7 +358,7 @@ int CloudService::send(const char *event,
     // much simpler if there is no callback and can just publish into the void
     if(!cb)
     {
-        if (!background_publish.publish(_writer_event_name, event, PRIVATE, priority))
+        if (!background_publish.publish(_writer_event_name, data, PRIVATE, priority))
         {
             rval = -EBUSY;
         }
@@ -399,8 +399,8 @@ int CloudService::send(const char *event,
 
     send_handler->cb = cb;
     send_handler->context = context;
-    send_handler->req_data = event;
-    if(!background_publish.publish(_writer_event_name, event,
+    send_handler->req_data = data;
+    if(!background_publish.publish<CloudService, const void *>(_writer_event_name, data,
                                    publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, send_handler))
     {
         delete send_handler;
@@ -409,7 +409,7 @@ int CloudService::send(const char *event,
 
     if(!rval)
     {
-        Log.info("cloud sent: %s", event);
+        Log.info("cloud sent: %s", data);
     }
 
     return rval;

@@ -37,9 +37,6 @@
 #include <functional>
 #include <list>
 
-using namespace std::placeholders;
-
-
 enum CloudServiceStatus {
     SUCCESS = 0,
     FAILURE, // publish to Particle cloud failed, etc
@@ -123,7 +120,7 @@ class CloudService
             const void *context=nullptr,
             std::size_t priority=0u);
 
-        int send(const char *event,
+        int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
             cloud_service_send_cb_t cb=nullptr,
@@ -134,7 +131,7 @@ class CloudService
             std::size_t priority=0u);
 
         template <typename T>
-        int send(const char *event,
+        int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
             int (T::*cb)(CloudServiceStatus status, JSONValue *, const char *, const void *context)=nullptr,
@@ -217,7 +214,7 @@ int CloudService::regCommandCallback(const char *name,
     uint32_t timeout_ms,
     const void *context)
 {
-    return regCommandCallback(name, std::bind(cb, instance, _1, _2, _3), req_id, timeout_ms, context);
+    return regCommandCallback(name, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), req_id, timeout_ms, context);
 }
 
 template <typename T>
@@ -229,7 +226,7 @@ int CloudService::send(PublishFlags publish_flags,
     const void *context,
     std::size_t priority)
 {
-    return send(publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, priority);
+    return send(publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), timeout_ms, context, priority);
 }
 
 
@@ -245,7 +242,7 @@ int CloudService::send(const char *event,
     uint32_t req_id,
     std::size_t priority)
 {
-    return send(event, publish_flags, cloud_flags, std::bind(cb, instance, _1, _2, _3, _4), timeout_ms, context, event_name, req_id, priority);
+    return send(event, publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), timeout_ms, context, event_name, req_id, priority);
 }
 
 void log_json(const char *json, size_t size);
