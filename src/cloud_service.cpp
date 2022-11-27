@@ -88,6 +88,17 @@ void CloudService::tick_sec()
     return req_id;
 }
 
+int CloudService::regCommand(const char *cmd, std::function<int(JSONValue *)> handler)
+{
+    std::lock_guard<RecursiveMutex> lg(mutex);
+
+    if (!cmd || strnlen(cmd, 1 + CLOUD_MAX_CMD_LEN) > CLOUD_MAX_CMD_LEN || !handler) {
+        return -EINVAL;
+    }
+    command_handlers.push_front(std::make_pair(String(cmd), handler));
+    return 0;
+}
+
 int CloudService::regCommandCallback(const char *cmd, cloud_service_cb_t cb, uint32_t req_id, uint32_t timeout_ms, const void *context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
@@ -211,6 +222,13 @@ int CloudService::dispatchCommand(String data)
     }
  
     std::lock_guard<RecursiveMutex> lg(mutex);
+
+    for (auto& command_handler: command_handlers) {
+        if (command_handler.first == cmd) {
+            return command_handler.second(&root);
+        }
+    }
+
     auto it = handlers.begin();
     while(it != handlers.end())
     {

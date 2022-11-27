@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <functional>
 #include <list>
+#include <utility>
 
 enum CloudServiceStatus {
     SUCCESS = 0,
@@ -152,6 +153,8 @@ class CloudService
         // process and dispatch incoming commands to registered callbacks
         int dispatchCommand(String cmd);
 
+        int regCommand(const char *name, std::function<int(JSONValue *)> handler);
+
         int regCommandCallback(const char *name, cloud_service_cb_t cb, uint32_t req_id=0, uint32_t timeout_ms=0, const void *context=nullptr);
 
         template <typename T>
@@ -195,6 +198,7 @@ class CloudService
         uint32_t last_tick_sec;
 
         std::list<cloud_service_handler_t> handlers;
+        std::list<std::pair<String, std::function<int(JSONValue *)>>> command_handlers;
         std::list<std::function<int()>> deferred_handlers;
 
         RecursiveMutex mutex;

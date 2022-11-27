@@ -165,9 +165,9 @@ ConfigService::ConfigService() :
 
 void ConfigService::init()
 {
-    CloudService::instance().regCommandCallback("set_cfg", &ConfigService::set_cfg_cb, this);
-    CloudService::instance().regCommandCallback("get_cfg", &ConfigService::get_cfg_cb, this);
-    CloudService::instance().regCommandCallback("reset_to_factory", &ConfigService::reset_to_factory_cb, this);
+    CloudService::instance().regCommand("set_cfg", std::bind(&ConfigService::set_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().regCommand("get_cfg", std::bind(&ConfigService::get_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().regCommand("reset_to_factory", std::bind(&ConfigService::reset_to_factory_cb, this, std::placeholders::_1));
 
     struct stat st;
 
@@ -554,7 +554,7 @@ int ConfigService::registerModule(ConfigNode &root)
 
 // callback for cloud "get_cfg" command
 // marks requested module(s) as dirty by invalidating the last synced crc
-int ConfigService::get_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::get_cfg_cb(JSONValue *root)
 {
     JSONValue *config = nullptr;
     JSONValue child;
@@ -602,7 +602,7 @@ int ConfigService::get_cfg_cb(CloudServiceStatus status, JSONValue *root, const 
 
 // callback for cloud "set_cfg" command
 // iterates and applies json config to the specified config descriptors
-int ConfigService::set_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::set_cfg_cb(JSONValue *root)
 {
     JSONValue *config = nullptr;
     JSONValue child;
@@ -666,7 +666,7 @@ int ConfigService::set_cfg_cb(CloudServiceStatus status, JSONValue *root, const 
     return rval;
 }
 
-int ConfigService::reset_to_factory_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::reset_to_factory_cb(JSONValue *root)
 {
     resetToFactory();
 
