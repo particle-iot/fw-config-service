@@ -305,7 +305,7 @@ int CloudService::beginResponse(const char *cmd, JSONValue &root)
 
 int CloudService::send_cb_wrapper(CloudServiceStatus status, JSONValue *rsp_root, const void *context)
 {
-    cloud_service_send_handler_t *send_handler = (cloud_service_send_handler_t *) context;
+    auto send_handler {static_cast<const cloud_service_send_handler_t*>(context)};
 
     int rval = send_handler->cb(status, rsp_root, send_handler->req_data, send_handler->context);
 
@@ -318,16 +318,16 @@ void CloudService::publish_cb(
     particle::Error error,
     const char *event_name,
     const char *event_data,
-    const void *event_context)
+    const cloud_service_send_handler_t *event_context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
-    cloud_service_handler_t &handler = ((cloud_service_send_handler_t *) event_context)->base_handler;
+    auto &base_handler = event_context->base_handler;
 
     if(error == Error::NONE) {
-        if(handler.cloud_flags & CloudServicePublishFlags::FULL_ACK) {
+        if(base_handler.cloud_flags & CloudServicePublishFlags::FULL_ACK) {
             // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
-            regCommandCallback(handler.cmd, handler.cb, handler.req_id, handler.timeout_ms, handler.context);
+            regCommandCallback(base_handler.cmd, base_handler.cb, base_handler.req_id, base_handler.timeout_ms, event_context);
         } else {
             deferred_handlers.push_front(std::bind(&CloudService::send_cb_wrapper, CloudServiceStatus::SUCCESS, nullptr, event_context));
         }
@@ -412,8 +412,8 @@ int CloudService::send(const char *data,
     send_handler->cb = cb;
     send_handler->context = context;
     send_handler->req_data = data; // big copy
-    if(!background_publish.publish<CloudService, const void *>(_writer_event_name, data,
-                                   publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, send_handler))
+    if(!background_publish.publish(_writer_event_name, data,
+                                   publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, static_cast<const cloud_service_send_handler_t *>(send_handler)))
     {
         delete send_handler;
         rval = -EBUSY;

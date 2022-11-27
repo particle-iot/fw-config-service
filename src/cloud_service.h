@@ -176,12 +176,12 @@ class CloudService
             particle::Error status,
             const char *event_name,
             const char *event_data,
-            const void *event_context);
+            const cloud_service_send_handler_t *send_handler);
 
         // internal callback wrapper on the send path
         static int send_cb_wrapper(CloudServiceStatus status,
             JSONValue *rsp_root,
-            const void *context);
+            const void *send_handler);
 
         // process infrequent actions
         void tick_sec();
