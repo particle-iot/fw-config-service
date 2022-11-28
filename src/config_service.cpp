@@ -676,7 +676,7 @@ int ConfigService::reset_to_factory_cb(JSONValue *root)
 }
 
 // callback for ack to overall config sync with cloud (on boot)
-int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, String req_event)
+int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS && sync_pending)
     {
@@ -688,7 +688,7 @@ int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, Strin
 }
 
 // callback for ack to individual config sync with cloud
-int ConfigService::config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, String req_event)
+int ConfigService::config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS)
     {

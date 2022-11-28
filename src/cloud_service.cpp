@@ -90,7 +90,7 @@ int CloudService::regCommand(const char *cmd, std::function<int(JSONValue *)> ha
     return 0;
 }
 
-int CloudService::registerAckCallback(cloud_service_ack_handler handler)
+int CloudService::registerAckCallback(cloud_service_ack_handler&& handler)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
     handlers.push_back(std::move(handler));
@@ -268,7 +268,7 @@ void CloudService::publish_cb(
     const char *event_name,
     const char *event_data,
     const bool full_ack_required,
-    cloud_service_ack_handler context)
+    cloud_service_ack_handler&& context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
@@ -276,10 +276,10 @@ void CloudService::publish_cb(
         if(full_ack_required) {
             registerAckCallback(std::move(context));
         } else {
-            deferred_handlers.push_back(std::bind(context.callback, CloudServiceStatus::SUCCESS, nullptr, std::move(context.data)));
+            deferred_handlers.push_back([context = std::move(context)] () mutable -> int { return context.callback(CloudServiceStatus::SUCCESS, nullptr, std::move(context.data)); });
         }
     } else if (error != Error::CANCELLED) {
-        deferred_handlers.push_back(std::bind(context.callback, CloudServiceStatus::FAILURE, nullptr, std::move(context.data)));
+        deferred_handlers.push_back([context = std::move(context)] () mutable -> int { return context.callback(CloudServiceStatus::FAILURE, nullptr, std::move(context.data)); });
     }
     // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
 }
@@ -332,7 +332,7 @@ int CloudService::send(const char *data,
     // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
     // to a String and is std::move()-ed around until it reaches the user callback.
     cloud_service_ack_handler send_handler {req_id, timeout, cb, data};
-    auto publish_cb = [=, send_handler = std::move(send_handler)] (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
+    auto publish_cb = [this, cloud_flags, send_handler = std::move(send_handler)] (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
         this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
     };
 

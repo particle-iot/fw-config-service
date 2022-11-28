@@ -50,7 +50,7 @@ enum CloudServicePublishFlags {
     FULL_ACK = 0x01 // full end-to-end acknowledgement
 };
 
-using cloud_service_ack_cb_t = std::function<int(CloudServiceStatus, JSONValue *, String)>;
+using cloud_service_ack_cb_t = std::function<int(CloudServiceStatus, JSONValue *, String&&)>;
 
 struct cloud_service_ack_handler {
     std::uint32_t req_id;
@@ -104,7 +104,7 @@ class CloudService
         template <typename T>
         int send(PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, String)=nullptr,
+            int (T::*cb)(CloudServiceStatus status, JSONValue *, String&&)=nullptr,
             T *instance=nullptr,
             uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
             std::size_t priority=0u)
@@ -116,7 +116,7 @@ class CloudService
         int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, String)=nullptr,
+            int (T::*cb)(CloudServiceStatus status, JSONValue *, String&&)=nullptr,
             T *instance=nullptr,
             uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
             const char *event_name=nullptr,
@@ -138,7 +138,7 @@ class CloudService
 
         int regCommand(const char *name, std::function<int(JSONValue *)> handler);
 
-        int registerAckCallback(cloud_service_ack_handler);
+        int registerAckCallback(cloud_service_ack_handler&&);
 
     private:
         CloudService();
@@ -152,7 +152,7 @@ class CloudService
             const char *event_name,
             const char *event_data,
             const bool full_ack_required,
-            cloud_service_ack_handler send_handler);
+            cloud_service_ack_handler&& send_handler);
 
         // process infrequent actions
         void tick_sec();
