@@ -20,6 +20,7 @@
 
 #include "BackgroundPublish.h"
 
+#include <limits>
 #include <string.h>
 
 CloudService *CloudService::_instance = nullptr;
@@ -58,22 +59,12 @@ void CloudService::tick_sec()
     uint32_t ms_now = millis();
 
     // timeout handlers
-    auto it = handlers.begin();
-    while(it != handlers.end())
-    {
-        bool erased = false;
-        if(it->timeout_ms && (ms_now - it->t0) > it->timeout_ms)
-        {
-            if(it->cb)
-            {
-                it->cb(CloudServiceStatus::TIMEOUT, nullptr, it->context);
-            }
+    for (auto it = handlers.begin(); it != handlers.end();) {
+        if (ms_now > it->timeout) {
+            it->callback(CloudServiceStatus::TIMEOUT, nullptr, std::move(it->data));
             it = handlers.erase(it);
-            erased = true;
-        }
-        if(!erased)
-        {
-            it++;
+        } else {
+            ++it;
         }
     }
 }
@@ -95,33 +86,14 @@ int CloudService::regCommand(const char *cmd, std::function<int(JSONValue *)> ha
     if (!cmd || strnlen(cmd, 1 + CLOUD_MAX_CMD_LEN) > CLOUD_MAX_CMD_LEN || !handler) {
         return -EINVAL;
     }
-    command_handlers.push_front(std::make_pair(String(cmd), handler));
+    command_handlers.push_back(std::make_pair(String(cmd), handler));
     return 0;
 }
 
-int CloudService::regCommandCallback(const char *cmd, cloud_service_cb_t cb, uint32_t req_id, uint32_t timeout_ms, const void *context)
+int CloudService::registerAckCallback(cloud_service_ack_handler handler)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
-    cloud_service_handler_t handler = {CloudServicePublishFlags::NONE, cb, "", req_id, timeout_ms, context, millis()};
-
-    if(!cb)
-    {
-        return -EINVAL;
-    }
-
-    if(cmd)
-    {
-        if(strnlen(cmd, sizeof(handler.cmd)) >= CLOUD_MAX_CMD_LEN)
-        {
-            return -EINVAL;
-        }
-
-        // TODO: range-limit the strlen?
-        strlcpy(handler.cmd, cmd, sizeof(handler.cmd));
-    }
-
-    handlers.push_front(handler);
-
+    handlers.push_back(std::move(handler));
     return 0;
 }
 
@@ -229,28 +201,16 @@ int CloudService::dispatchCommand(String data)
         }
     }
 
-    auto it = handlers.begin();
-    while(it != handlers.end())
-    {
-        bool erased = false;
-
-        if((!it->cmd[0] || !strcmp(it->cmd, cmd)) &&
-            (!it->req_id || it->req_id == req_id) &&
-            it->cb)
-        {
-            rval = it->cb(CloudServiceStatus::SUCCESS, &root, it->context);
-            if(it->req_id || it->timeout_ms)
-            {
-                // anything looking for a specific req_id or with a
-                // timeout implied to be one-shot and removed here
-                it = handlers.erase(it);
-                erased = true;
-            }
-        }
-        // on handler erasure the iterator is already incremented
-        if(!erased)
-        {
-            it++;
+    // Process ack messages
+    if (strncmp(cmd, "ack", 1 + sizeof("ack"))) {
+        return -ENOENT;
+    }
+    for (auto it = handlers.begin(); it != handlers.end();) {
+        if (req_id == it->req_id) {
+            rval = it->callback(CloudServiceStatus::SUCCESS, &root, std::move(it->data));
+            it = handlers.erase(it);
+        } else {
+            ++it;
         }
     }
 
@@ -303,45 +263,32 @@ int CloudService::beginResponse(const char *cmd, JSONValue &root)
     return 0;
 }
 
-int CloudService::send_cb_wrapper(CloudServiceStatus status, JSONValue *rsp_root, const void *context)
-{
-    auto send_handler {static_cast<const cloud_service_send_handler_t*>(context)};
-
-    int rval = send_handler->cb(status, rsp_root, send_handler->req_data, send_handler->context);
-
-    delete send_handler;
-
-    return rval;
-}
-
 void CloudService::publish_cb(
     particle::Error error,
     const char *event_name,
     const char *event_data,
-    const cloud_service_send_handler_t *event_context)
+    const bool full_ack_required,
+    cloud_service_ack_handler context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
-    auto &base_handler = event_context->base_handler;
-
     if(error == Error::NONE) {
-        if(base_handler.cloud_flags & CloudServicePublishFlags::FULL_ACK) {
-            // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
-            regCommandCallback(base_handler.cmd, base_handler.cb, base_handler.req_id, base_handler.timeout_ms, event_context);
+        if(full_ack_required) {
+            registerAckCallback(std::move(context));
         } else {
-            deferred_handlers.push_front(std::bind(&CloudService::send_cb_wrapper, CloudServiceStatus::SUCCESS, nullptr, event_context));
+            deferred_handlers.push_back(std::bind(context.callback, CloudServiceStatus::SUCCESS, nullptr, std::move(context.data)));
         }
-    } else {
-        deferred_handlers.push_front(std::bind(&CloudService::send_cb_wrapper, CloudServiceStatus::FAILURE, nullptr, event_context));
+    } else if (error != Error::CANCELLED) {
+        deferred_handlers.push_back(std::bind(context.callback, CloudServiceStatus::FAILURE, nullptr, std::move(context.data)));
     }
+    // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
 }
 
 int CloudService::send(const char *data,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
-    cloud_service_send_cb_t cb,
+    cloud_service_ack_cb_t cb,
     unsigned int timeout_ms,
-    const void *context,
     const char *event_name,
     uint32_t req_id,
     std::size_t priority)
@@ -377,45 +324,21 @@ int CloudService::send(const char *data,
         return rval;
     }
 
-    // otherwise we need three (?!) layers of callbacks here to associate the
-    // caller callback/context to ultimate success/failure of the transaction
-
-    // 1. Callback into the non-blocking background publish lib
-    // 2. Callback waiting on the success/failure of the app ack
-    // 3. Callback as passed in by the user
-
-    // Callback (1) is a wrapper around Callback (2) which wraps around
-    // Callback (3). Both of the wrappers are provided by CloudService.
-
-    // Callback (1) waits on success/fail of the iniital publish and 
-    // sets up Callback (2).
-
-    // Callback (2) is either triggered immediately or waits on the
-    // application acknowledgement. It manages additional meta-data not
-    // included in the basic handler registration, most importantly info
-    // about the originating event that the user Callback (3) might want
-    // to know.
-    
-    // allocate space for handler info and copy of requesting event
-    cloud_service_send_handler_t *send_handler  = new cloud_service_send_handler_t;
-    if (!send_handler) {
-        return -ENOMEM;
+    auto timeout = millis() + timeout_ms;
+    if (timeout < timeout_ms) { // unsigned overflow
+        timeout = std::numeric_limits<system_tick_t>::max();
     }
 
-    send_handler->base_handler.cloud_flags = cloud_flags;
-    send_handler->base_handler.cb = send_cb_wrapper;
-    send_handler->base_handler.cmd[0] = '\0';
-    send_handler->base_handler.req_id = req_id;
-    send_handler->base_handler.timeout_ms = timeout_ms;
-    send_handler->base_handler.context = send_handler;
+    // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
+    // to a String and is std::move()-ed around until it reaches the user callback.
+    cloud_service_ack_handler send_handler {req_id, timeout, cb, data};
+    auto publish_cb = [=, send_handler = std::move(send_handler)] (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
+        this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
+    };
 
-    send_handler->cb = cb;
-    send_handler->context = context;
-    send_handler->req_data = data; // big copy
     if(!background_publish.publish(_writer_event_name, data,
-                                   publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, static_cast<const cloud_service_send_handler_t *>(send_handler)))
+                                   publish_flags | PRIVATE, priority, publish_cb))
     {
-        delete send_handler;
         rval = -EBUSY;
     }
 
@@ -429,9 +352,8 @@ int CloudService::send(const char *data,
 
 int CloudService::send(PublishFlags publish_flags, 
                     CloudServicePublishFlags cloud_flags, 
-                    cloud_service_send_cb_t cb, 
+                    cloud_service_ack_cb_t cb,
                     unsigned int timeout_ms, 
-                    const void *context, 
                     std::size_t priority)
 {
     int rval = 0;
@@ -457,7 +379,7 @@ int CloudService::send(PublishFlags publish_flags,
     // ensure null termination of the output json
     writer().buffer()[writer().dataSize()] = '\0';
 
-    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, context, _writer_event_name, req_id, priority);
+    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, _writer_event_name, req_id, priority);
 
     unlock();
     return rval;

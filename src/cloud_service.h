@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <list>
 #include <utility>
 
@@ -49,33 +50,13 @@ enum CloudServicePublishFlags {
     FULL_ACK = 0x01 // full end-to-end acknowledgement
 };
 
-typedef std::function<int(CloudServiceStatus status, JSONValue *, const void *context)> cloud_service_cb_t;
+using cloud_service_ack_cb_t = std::function<int(CloudServiceStatus, JSONValue *, String)>;
 
-typedef std::function<int(CloudServiceStatus status, JSONValue *, const char *, const void *context)> cloud_service_send_cb_t;
-
-class cloud_service_handler_t
-{
-public:
-    CloudServicePublishFlags cloud_flags;
-    cloud_service_cb_t cb;
-    // match on this cmd (or blank for don't care)
-    char cmd[CLOUD_MAX_CMD_LEN + 1];
-    // match on this req_id (or 0 don't care)
-    uint32_t req_id;
-    // fail on match after a timeout, or 0 for never timeout
-    uint32_t timeout_ms;
-    const void *context;
-    uint32_t t0;
-    CloudServiceStatus status;
-};
-
-class cloud_service_send_handler_t
-{
-public:
-    cloud_service_handler_t base_handler;
-    cloud_service_send_cb_t cb;
-    const void *context;
-    String req_data;
+struct cloud_service_ack_handler {
+    std::uint32_t req_id;
+    system_tick_t timeout; // absolute time of timeout, compared against millis()
+    cloud_service_ack_cb_t callback;
+    String data; // copy of original payload
 };
 
 class CloudService
@@ -105,43 +86,45 @@ class CloudService
         int beginResponse(const char *cmd, JSONValue &root);
         size_t estimatedEndCommandSize() const;
 
+        int send(const char *data,
+            PublishFlags publish_flags = PRIVATE,
+            CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
+            cloud_service_ack_cb_t cb=nullptr,
+            unsigned int timeout_ms=std::numeric_limits<system_tick_t>::max(),
+            const char *event_name=nullptr,
+            uint32_t req_id=0,
+            std::size_t priority=0u);
+
         int send(PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            cloud_service_send_cb_t cb=nullptr,
-            unsigned int timeout_ms=0,
-            const void *context=nullptr,
+            cloud_service_ack_cb_t cb=nullptr,
+            unsigned int timeout_ms=std::numeric_limits<system_tick_t>::max(),
             std::size_t priority=0u);
 
         template <typename T>
         int send(PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, const char *, const void *context)=nullptr,
+            int (T::*cb)(CloudServiceStatus status, JSONValue *, String)=nullptr,
             T *instance=nullptr,
-            uint32_t timeout_ms=0,
-            const void *context=nullptr,
-            std::size_t priority=0u);
-
-        int send(const char *data,
-            PublishFlags publish_flags = PRIVATE,
-            CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            cloud_service_send_cb_t cb=nullptr,
-            unsigned int timeout_ms=0,
-            const void *context=nullptr,
-            const char *event_name=nullptr,
-            uint32_t req_id=0,
-            std::size_t priority=0u);
+            uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
+            std::size_t priority=0u)
+        {
+            return send(publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), timeout_ms, priority);
+        }
 
         template <typename T>
         int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, const char *, const void *context)=nullptr,
+            int (T::*cb)(CloudServiceStatus status, JSONValue *, String)=nullptr,
             T *instance=nullptr,
-            uint32_t timeout_ms=0,
-            const void *context=nullptr,
+            uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
             const char *event_name=nullptr,
             uint32_t req_id=0,
-            std::size_t priority=0u);
+            std::size_t priority=0u)
+        {
+            return send(data, publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), timeout_ms, event_name, req_id, priority);
+        }
 
         int sendAck(JSONValue &root, int status);
 
@@ -155,15 +138,7 @@ class CloudService
 
         int regCommand(const char *name, std::function<int(JSONValue *)> handler);
 
-        int regCommandCallback(const char *name, cloud_service_cb_t cb, uint32_t req_id=0, uint32_t timeout_ms=0, const void *context=nullptr);
-
-        template <typename T>
-        int regCommandCallback(const char *name,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, const void *context),
-            T *instance,
-            uint32_t req_id=0,
-            uint32_t timeout_ms=0,
-            const void *context=nullptr);
+        int registerAckCallback(cloud_service_ack_handler);
 
     private:
         CloudService();
@@ -176,12 +151,8 @@ class CloudService
             particle::Error status,
             const char *event_name,
             const char *event_data,
-            const cloud_service_send_handler_t *send_handler);
-
-        // internal callback wrapper on the send path
-        static int send_cb_wrapper(CloudServiceStatus status,
-            JSONValue *rsp_root,
-            const void *send_handler);
+            const bool full_ack_required,
+            cloud_service_ack_handler send_handler);
 
         // process infrequent actions
         void tick_sec();
@@ -197,7 +168,7 @@ class CloudService
 
         uint32_t last_tick_sec;
 
-        std::list<cloud_service_handler_t> handlers;
+        std::list<cloud_service_ack_handler> handlers;
         std::list<std::pair<String, std::function<int(JSONValue *)>>> command_handlers;
         std::list<std::function<int()>> deferred_handlers;
 
@@ -208,45 +179,6 @@ inline size_t CloudService::estimatedEndCommandSize() const {
     // this is the worst case estimate for closing a publish message.  Any outgoing
     // message should have this string fit.
     return sizeof(",\"req_id\":}") - 1 /* null */ + 10 /* digits in uint32_t */;
-}
-
-template <typename T>
-int CloudService::regCommandCallback(const char *name,
-    int (T::*cb)(CloudServiceStatus status, JSONValue *, const void *context),
-    T *instance,
-    uint32_t req_id,
-    uint32_t timeout_ms,
-    const void *context)
-{
-    return regCommandCallback(name, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), req_id, timeout_ms, context);
-}
-
-template <typename T>
-int CloudService::send(PublishFlags publish_flags,
-    CloudServicePublishFlags cloud_flags,
-    int (T::*cb)(CloudServiceStatus status, JSONValue *, const char *, const void *context),
-    T *instance,
-    uint32_t timeout_ms,
-    const void *context,
-    std::size_t priority)
-{
-    return send(publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), timeout_ms, context, priority);
-}
-
-
-template <typename T>
-int CloudService::send(const char *event,
-    PublishFlags publish_flags,
-    CloudServicePublishFlags cloud_flags,
-    int (T::*cb)(CloudServiceStatus status, JSONValue *, const char *, const void *context),
-    T *instance,
-    uint32_t timeout_ms,
-    const void *context,
-    const char *event_name,
-    uint32_t req_id,
-    std::size_t priority)
-{
-    return send(event, publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), timeout_ms, context, event_name, req_id, priority);
 }
 
 void log_json(const char *json, size_t size);
