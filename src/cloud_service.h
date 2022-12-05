@@ -50,12 +50,12 @@ enum CloudServicePublishFlags {
     FULL_ACK = 0x01 // full end-to-end acknowledgement
 };
 
-using cloud_service_ack_cb_t = std::function<int(CloudServiceStatus, JSONValue *, String&&)>;
+using cloud_service_ack_callback = std::function<int(CloudServiceStatus, JSONValue *, String&&)>;
 
-struct cloud_service_ack_handler {
+struct cloud_service_ack_data {
     std::uint32_t req_id;
     system_tick_t timeout; // absolute time of timeout, compared against millis()
-    cloud_service_ack_cb_t callback;
+    cloud_service_ack_callback callback;
     String data; // copy of original payload
 };
 
@@ -89,7 +89,7 @@ class CloudService
         int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            cloud_service_ack_cb_t cb=nullptr,
+            cloud_service_ack_callback cb=nullptr,
             unsigned int timeout_ms=std::numeric_limits<system_tick_t>::max(),
             const char *event_name=nullptr,
             uint32_t req_id=0,
@@ -97,7 +97,7 @@ class CloudService
 
         int send(PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            cloud_service_ack_cb_t cb=nullptr,
+            cloud_service_ack_callback cb=nullptr,
             unsigned int timeout_ms=std::numeric_limits<system_tick_t>::max(),
             std::size_t priority=0u);
 
@@ -138,8 +138,6 @@ class CloudService
 
         int regCommand(const char *name, std::function<int(JSONValue *)> handler);
 
-        int registerAckCallback(cloud_service_ack_handler&&);
-
     private:
         CloudService();
         static CloudService *_instance;
@@ -152,7 +150,9 @@ class CloudService
             const char *event_name,
             const char *event_data,
             const bool full_ack_required,
-            cloud_service_ack_handler&& send_handler);
+            cloud_service_ack_data&& send_handler);
+
+        int registerAckCallback(cloud_service_ack_data&&);
 
         // process infrequent actions
         void tick_sec();
@@ -168,9 +168,9 @@ class CloudService
 
         uint32_t last_tick_sec;
 
-        std::list<cloud_service_ack_handler> handlers;
+        std::list<cloud_service_ack_data> ack_handlers;
         std::list<std::pair<String, std::function<int(JSONValue *)>>> command_handlers;
-        std::list<std::function<int()>> deferred_handlers;
+        std::list<std::function<int()>> deferred_acks;
 
         RecursiveMutex mutex;
 };

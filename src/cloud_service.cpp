@@ -71,22 +71,22 @@ void CloudService::tick()
         tick_sec();
     }
 
-    for(auto &handler : deferred_handlers)
+    for(auto &ack: deferred_acks)
     {
-        handler();
+        ack();
     }
-    deferred_handlers.clear();
+    deferred_acks.clear();
 }
 
 void CloudService::tick_sec()
 {
     uint32_t ms_now = millis();
 
-    // timeout handlers
-    for (auto it = handlers.begin(); it != handlers.end();) {
+    // timeout ack handlers
+    for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
         if (ms_now > it->timeout) {
             it->callback(CloudServiceStatus::TIMEOUT, nullptr, std::move(it->data));
-            it = handlers.erase(it);
+            it = ack_handlers.erase(it);
         } else {
             ++it;
         }
@@ -114,10 +114,10 @@ int CloudService::regCommand(const char *cmd, std::function<int(JSONValue *)> ha
     return 0;
 }
 
-int CloudService::registerAckCallback(cloud_service_ack_handler&& handler)
+int CloudService::registerAckCallback(cloud_service_ack_data&& handler)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
-    handlers.push_back(std::move(handler));
+    ack_handlers.push_back(std::move(handler));
     return 0;
 }
 
@@ -219,9 +219,9 @@ int CloudService::dispatchCommand(String data)
  
     std::lock_guard<RecursiveMutex> lg(mutex);
 
-    for (auto& command_handler: command_handlers) {
-        if (command_handler.first == cmd) {
-            return command_handler.second(&root);
+    for (auto& [cmd_name, handler]: command_handlers) {
+        if (cmd_name == cmd) {
+            return handler(&root);
         }
     }
 
@@ -229,10 +229,10 @@ int CloudService::dispatchCommand(String data)
     if (strncmp(cmd, "ack", 1 + sizeof("ack"))) {
         return -ENOENT;
     }
-    for (auto it = handlers.begin(); it != handlers.end();) {
+    for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
         if (req_id == it->req_id) {
             rval = it->callback(CloudServiceStatus::SUCCESS, &root, std::move(it->data));
-            it = handlers.erase(it);
+            it = ack_handlers.erase(it);
         } else {
             ++it;
         }
@@ -292,7 +292,7 @@ void CloudService::publish_cb(
     const char *event_name,
     const char *event_data,
     const bool full_ack_required,
-    cloud_service_ack_handler&& context)
+    cloud_service_ack_data&& context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
@@ -300,12 +300,12 @@ void CloudService::publish_cb(
         if(full_ack_required) {
             registerAckCallback(std::move(context));
         } else {
-            deferred_handlers.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+            deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
                 return context.callback(CloudServiceStatus::SUCCESS, nullptr, std::move(context.data));
             })));
         }
     } else if (error != Error::CANCELLED) {
-        deferred_handlers.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+        deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
             return context.callback(CloudServiceStatus::FAILURE, nullptr, std::move(context.data));
         })));
     }
@@ -315,7 +315,7 @@ void CloudService::publish_cb(
 int CloudService::send(const char *data,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
-    cloud_service_ack_cb_t cb,
+    cloud_service_ack_callback cb,
     unsigned int timeout_ms,
     const char *event_name,
     uint32_t req_id,
@@ -359,7 +359,7 @@ int CloudService::send(const char *data,
 
     // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
     // to a String and is moved around until it reaches the user callback.
-    cloud_service_ack_handler send_handler {req_id, timeout, cb, data};
+    cloud_service_ack_data send_handler {req_id, timeout, cb, data};
     auto publish_cb = make_shared_function([this, cloud_flags, send_handler = std::move(send_handler)]
         (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
             this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
@@ -382,7 +382,7 @@ int CloudService::send(const char *data,
 
 int CloudService::send(PublishFlags publish_flags, 
                     CloudServicePublishFlags cloud_flags, 
-                    cloud_service_ack_cb_t cb,
+                    cloud_service_ack_callback cb,
                     unsigned int timeout_ms, 
                     std::size_t priority)
 {
