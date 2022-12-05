@@ -21,7 +21,31 @@
 #include "BackgroundPublish.h"
 
 #include <limits>
+#include <memory>
 #include <string.h>
+
+// shared_function<F> allows a move-only function to be (unsafely) passed as a std::function<F>
+// until C++23 makes std::move_only_function available.
+// Calling code is responsible for ensuring it is always passed by rvalue reference.
+template<typename F>
+struct shared_function {
+    std::shared_ptr<F> f;
+    shared_function() = default;
+    shared_function(F&& f_): f(std::make_shared<F>(std::forward<F>(f_))) {}
+    shared_function(const shared_function&) = default;
+    shared_function(shared_function&&) = default;
+    shared_function& operator=(const shared_function&) = default;
+    shared_function& operator=(shared_function&&) = default;
+
+    template<typename... Args>
+    auto operator()(Args&&... args) const {
+        return (*f)(std::forward<Args>(args)...);
+    }
+};
+template<typename F>
+shared_function<std::decay_t<F>> make_shared_function(F&& f) {
+    return std::forward<F>(f);
+}
 
 CloudService *CloudService::_instance = nullptr;
 
@@ -47,7 +71,7 @@ void CloudService::tick()
         tick_sec();
     }
 
-    for(auto handler : deferred_handlers)
+    for(auto &handler : deferred_handlers)
     {
         handler();
     }
@@ -276,10 +300,14 @@ void CloudService::publish_cb(
         if(full_ack_required) {
             registerAckCallback(std::move(context));
         } else {
-            deferred_handlers.push_back([context = std::move(context)] () mutable -> int { return context.callback(CloudServiceStatus::SUCCESS, nullptr, std::move(context.data)); });
+            deferred_handlers.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+                return context.callback(CloudServiceStatus::SUCCESS, nullptr, std::move(context.data));
+            })));
         }
     } else if (error != Error::CANCELLED) {
-        deferred_handlers.push_back([context = std::move(context)] () mutable -> int { return context.callback(CloudServiceStatus::FAILURE, nullptr, std::move(context.data)); });
+        deferred_handlers.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+            return context.callback(CloudServiceStatus::FAILURE, nullptr, std::move(context.data));
+        })));
     }
     // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
 }
@@ -330,14 +358,16 @@ int CloudService::send(const char *data,
     }
 
     // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
-    // to a String and is std::move()-ed around until it reaches the user callback.
+    // to a String and is moved around until it reaches the user callback.
     cloud_service_ack_handler send_handler {req_id, timeout, cb, data};
-    auto publish_cb = [this, cloud_flags, send_handler = std::move(send_handler)] (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
-        this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
-    };
+    auto publish_cb = make_shared_function([this, cloud_flags, send_handler = std::move(send_handler)]
+        (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
+            this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
+        }
+    );
 
     if(!background_publish.publish(_writer_event_name, data,
-                                   publish_flags | PRIVATE, priority, publish_cb))
+                                   publish_flags | PRIVATE, priority, std::move(publish_cb)))
     {
         rval = -EBUSY;
     }
