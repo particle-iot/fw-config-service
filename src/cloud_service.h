@@ -84,7 +84,6 @@ class CloudService
         // starts a new command/ack
         int beginCommand(const char *cmd);
         int beginResponse(const char *cmd, JSONValue &root);
-        size_t estimatedEndCommandSize() const;
 
         int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
@@ -174,11 +173,5 @@ class CloudService
 
         RecursiveMutex mutex;
 };
-
-inline size_t CloudService::estimatedEndCommandSize() const {
-    // this is the worst case estimate for closing a publish message.  Any outgoing
-    // message should have this string fit.
-    return sizeof(",\"req_id\":}") - 1 /* null */ + 10 /* digits in uint32_t */;
-}
 
 void log_json(const char *json, size_t size);
