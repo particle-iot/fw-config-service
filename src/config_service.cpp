@@ -165,9 +165,9 @@ ConfigService::ConfigService() :
 
 void ConfigService::init()
 {
-    CloudService::instance().regCommandCallback("set_cfg", &ConfigService::set_cfg_cb, this);
-    CloudService::instance().regCommandCallback("get_cfg", &ConfigService::get_cfg_cb, this);
-    CloudService::instance().regCommandCallback("reset_to_factory", &ConfigService::reset_to_factory_cb, this);
+    CloudService::instance().registerCommand("set_cfg", std::bind(&ConfigService::set_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().registerCommand("get_cfg", std::bind(&ConfigService::get_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().registerCommand("reset_to_factory", std::bind(&ConfigService::reset_to_factory_cb, this, std::placeholders::_1));
 
     struct stat st;
 
@@ -239,8 +239,8 @@ void ConfigService::tick_sec()
                 cloud_service.beginCommand(CLOUD_CMD_SYNC);
                 cloud_service.writer().name("hash").value(_format_hash_str(hash_accum).c_str());
                 // TODO: Cloud is not sending app ack yet
-                // if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::FULL_ACK, &ConfigService::sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS, nullptr))
-                if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::NONE, &ConfigService::sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS, nullptr))
+                // if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::FULL_ACK, &ConfigService::sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS))
+                if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::NONE, &ConfigService::sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS))
                 {
                     sync_pending = true;
                 }
@@ -259,8 +259,8 @@ void ConfigService::tick_sec()
                         config_write_json(it.root, cloud_service.writer());
                         cloud_service.writer().endObject();
                         // TODO: Cloud is not sending app ack yet
-                        // if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::FULL_ACK, &ConfigService::config_sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS, nullptr))
-                        if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::NONE, &ConfigService::config_sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS, nullptr))
+                        // if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::FULL_ACK, &ConfigService::config_sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS))
+                        if(!cloud_service.send(WITH_ACK, CloudServicePublishFlags::NONE, &ConfigService::config_sync_ack_cb, this, CLOUD_DEFAULT_TIMEOUT_MS))
                         {
                             config_sync_pending_object = &it;
                             // possible config could be updated again before ack
@@ -554,7 +554,7 @@ int ConfigService::registerModule(ConfigNode &root)
 
 // callback for cloud "get_cfg" command
 // marks requested module(s) as dirty by invalidating the last synced crc
-int ConfigService::get_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::get_cfg_cb(JSONValue *root)
 {
     JSONValue *config = nullptr;
     JSONValue child;
@@ -602,7 +602,7 @@ int ConfigService::get_cfg_cb(CloudServiceStatus status, JSONValue *root, const 
 
 // callback for cloud "set_cfg" command
 // iterates and applies json config to the specified config descriptors
-int ConfigService::set_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::set_cfg_cb(JSONValue *root)
 {
     JSONValue *config = nullptr;
     JSONValue child;
@@ -666,7 +666,7 @@ int ConfigService::set_cfg_cb(CloudServiceStatus status, JSONValue *root, const 
     return rval;
 }
 
-int ConfigService::reset_to_factory_cb(CloudServiceStatus status, JSONValue *root, const void *context)
+int ConfigService::reset_to_factory_cb(JSONValue *root)
 {
     resetToFactory();
 
@@ -676,7 +676,7 @@ int ConfigService::reset_to_factory_cb(CloudServiceStatus status, JSONValue *roo
 }
 
 // callback for ack to overall config sync with cloud (on boot)
-int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, const char *req_event, const void *context)
+int ConfigService::sync_ack_cb(CloudServiceStatus status, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS && sync_pending)
     {
@@ -688,7 +688,7 @@ int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, const
 }
 
 // callback for ack to individual config sync with cloud
-int ConfigService::config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, const char *req_event, const void *context)
+int ConfigService::config_sync_ack_cb(CloudServiceStatus status, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS)
     {

@@ -87,12 +87,12 @@ class ConfigService
 
         std::list<config_service_desc_t>::iterator get_module(const char *name);
 
-        int get_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context);
-        int set_cfg_cb(CloudServiceStatus status, JSONValue *root, const void *context);
-        int reset_to_factory_cb(CloudServiceStatus status, JSONValue *root, const void *context);
+        int get_cfg_cb(JSONValue *root);
+        int set_cfg_cb(JSONValue *root);
+        int reset_to_factory_cb(JSONValue *root);
 
-        int sync_ack_cb(CloudServiceStatus status, JSONValue *root, const char *req_event, const void *context);
-        int config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, const char *req_event, const void *context);
+        int sync_ack_cb(CloudServiceStatus status, String&& req_event);
+        int config_sync_ack_cb(CloudServiceStatus status, String&& req_event);
 
         // process infrequent actions
         void tick_sec();

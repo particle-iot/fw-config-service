@@ -20,7 +20,32 @@
 
 #include "BackgroundPublish.h"
 
+#include <limits>
+#include <memory>
 #include <string.h>
+
+// shared_function<F> allows a move-only function to be (unsafely) passed as a std::function<F>
+// until C++23 makes std::move_only_function available.
+// Calling code is responsible for ensuring it is always passed by rvalue reference.
+template<typename F>
+struct shared_function {
+    std::shared_ptr<F> f;
+    shared_function() = default;
+    shared_function(F&& f_): f(std::make_shared<F>(std::forward<F>(f_))) {}
+    shared_function(const shared_function&) = default;
+    shared_function(shared_function&&) = default;
+    shared_function& operator=(const shared_function&) = default;
+    shared_function& operator=(shared_function&&) = default;
+
+    template<typename... Args>
+    auto operator()(Args&&... args) const {
+        return (*f)(std::forward<Args>(args)...);
+    }
+};
+template<typename F>
+shared_function<std::decay_t<F>> make_shared_function(F&& f) {
+    return std::forward<F>(f);
+}
 
 CloudService *CloudService::_instance = nullptr;
 
@@ -46,34 +71,24 @@ void CloudService::tick()
         tick_sec();
     }
 
-    for(auto handler : deferred_handlers)
+    for(auto &ack: deferred_acks)
     {
-        handler.cb(handler.status, nullptr, handler.context);
+        ack();
     }
-    deferred_handlers.clear();
+    deferred_acks.clear();
 }
 
 void CloudService::tick_sec()
 {
     uint32_t ms_now = millis();
 
-    // timeout handlers
-    auto it = handlers.begin();
-    while(it != handlers.end())
-    {
-        bool erased = false;
-        if(it->timeout_ms && (ms_now - it->t0) > it->timeout_ms)
-        {
-            if(it->cb)
-            {
-                it->cb(CloudServiceStatus::TIMEOUT, nullptr, it->context);
-            }
-            it = handlers.erase(it);
-            erased = true;
-        }
-        if(!erased)
-        {
-            it++;
+    // timeout ack handlers
+    for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
+        if (ms_now > it->timeout) {
+            it->callback(CloudServiceStatus::TIMEOUT, std::move(it->data));
+            it = ack_handlers.erase(it);
+        } else {
+            ++it;
         }
     }
 }
@@ -88,29 +103,21 @@ void CloudService::tick_sec()
     return req_id;
 }
 
-int CloudService::regCommandCallback(const char *cmd, cloud_service_cb_t cb, uint32_t req_id, uint32_t timeout_ms, const void *context)
+int CloudService::registerCommand(const char *cmd, std::function<int(JSONValue *)> handler)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
-    cloud_service_handler_t handler = {CloudServicePublishFlags::NONE, cb, "", req_id, timeout_ms, context, millis()};
 
-    if(!cb)
-    {
+    if (!cmd || (strnlen(cmd, 1 + CLOUD_MAX_CMD_LEN) > CLOUD_MAX_CMD_LEN) || !handler) {
         return -EINVAL;
     }
+    command_handlers.push_back(std::make_pair(String(cmd), handler));
+    return 0;
+}
 
-    if(cmd)
-    {
-        if(strnlen(cmd, sizeof(handler.cmd)) >= CLOUD_MAX_CMD_LEN)
-        {
-            return -EINVAL;
-        }
-
-        // TODO: range-limit the strlen?
-        strlcpy(handler.cmd, cmd, sizeof(handler.cmd));
-    }
-
-    handlers.push_front(handler);
-
+int CloudService::registerAckCallback(cloud_service_ack_context&& context)
+{
+    std::lock_guard<RecursiveMutex> lg(mutex);
+    ack_handlers.push_back(std::move(context));
     return 0;
 }
 
@@ -211,28 +218,23 @@ int CloudService::dispatchCommand(String data)
     }
  
     std::lock_guard<RecursiveMutex> lg(mutex);
-    auto it = handlers.begin();
-    while(it != handlers.end())
-    {
-        bool erased = false;
 
-        if((!it->cmd[0] || !strcmp(it->cmd, cmd)) &&
-            (!it->req_id || it->req_id == req_id) &&
-            it->cb)
-        {
-            rval = it->cb(CloudServiceStatus::SUCCESS, &root, it->context);
-            if(it->req_id || it->timeout_ms)
-            {
-                // anything looking for a specific req_id or with a
-                // timeout implied to be one-shot and removed here
-                it = handlers.erase(it);
-                erased = true;
-            }
+    for (auto& [cmd_name, handler]: command_handlers) {
+        if (cmd_name == cmd) {
+            return handler(&root);
         }
-        // on handler erasure the iterator is already incremented
-        if(!erased)
-        {
-            it++;
+    }
+
+    // Process ack messages
+    if (strncmp(cmd, "ack", 1 + sizeof("ack"))) {
+        return -ENOENT;
+    }
+    for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
+        if (req_id == it->req_id) {
+            rval = it->callback(CloudServiceStatus::SUCCESS, std::move(it->data));
+            it = ack_handlers.erase(it);
+        } else {
+            ++it;
         }
     }
 
@@ -285,57 +287,17 @@ int CloudService::beginResponse(const char *cmd, JSONValue &root)
     return 0;
 }
 
-int CloudService::send_cb_wrapper(CloudServiceStatus status, JSONValue *rsp_root, const void *context)
-{
-    cloud_service_send_handler_t *send_handler = (cloud_service_send_handler_t *) context;
-
-    int rval = send_handler->cb(status, rsp_root, send_handler->req_data, send_handler->context);
-
-    delete send_handler;
-
-    return rval;
-}
-
-void CloudService::publish_cb(
-    particle::Error error,
-    const char *event_name,
-    const char *event_data,
-    const void *event_context)
-{
-    std::lock_guard<RecursiveMutex> lg(mutex);
-
-    if(!event_context) {
-        return;
-    }
-
-    cloud_service_handler_t &handler = ((cloud_service_send_handler_t *) event_context)->base_handler;
-
-    if(error == Error::NONE) {
-        if(handler.cloud_flags & CloudServicePublishFlags::FULL_ACK) {
-            // expecting full end-to-end acknowledgement so set up handler waiting for the ACK
-            regCommandCallback(handler.cmd, handler.cb, handler.req_id, handler.timeout_ms, handler.context);
-        } else {
-            handler.status = CloudServiceStatus::SUCCESS;
-            deferred_handlers.push_front(handler);
-        }
-    } else {
-        handler.status = CloudServiceStatus::FAILURE;
-        deferred_handlers.push_front(handler);
-    }
-}
-
-int CloudService::send(const char *event,
+int CloudService::send(const char *data,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
-    cloud_service_send_cb_t cb,
+    cloud_service_ack_callback cb,
     unsigned int timeout_ms,
-    const void *context,
     const char *event_name,
     uint32_t req_id,
     std::size_t priority)
 {
     int rval = 0;
-    size_t event_len = strlen(event);
+    size_t data_len = strlen(data);
     std::lock_guard<RecursiveMutex> lg(mutex);
 
     if(!event_name ||
@@ -343,12 +305,12 @@ int CloudService::send(const char *event,
     {
         // should have request id or event name but it wasn't passed in
         // extract from event
-        JSONValue root = JSONValue::parseCopy(event, event_len);
+        JSONValue root = JSONValue::parseCopy(data, data_len);
         _get_common_fields(root, &event_name, nullptr, &req_id, nullptr);
 
         if(!event_name)
         {
-            Log.info("Event Name failed: %s", event);
+            Log.info("Event Name failed: %s", data);
             return -EINVAL;
         }
     }    
@@ -358,58 +320,51 @@ int CloudService::send(const char *event,
     // much simpler if there is no callback and can just publish into the void
     if(!cb)
     {
-        if (!background_publish.publish(_writer_event_name, event, PRIVATE, priority))
+        if (!background_publish.publish(_writer_event_name, data, PRIVATE, priority))
         {
             rval = -EBUSY;
         }
         return rval;
     }
 
-    // otherwise we need three (?!) layers of callbacks here to associate the
-    // caller callback/context to ultimate success/failure of the transaction
-
-    // 1. Callback into the non-blocking background publish lib
-    // 2. Callback waiting on the success/failure of the app ack
-    // 3. Callback as passed in by the user
-
-    // Callback (1) is a wrapper around Callback (2) which wraps around
-    // Callback (3). Both of the wrappers are provided by CloudService.
-
-    // Callback (1) waits on success/fail of the iniital publish and 
-    // sets up Callback (2).
-
-    // Callback (2) is either triggered immediately or waits on the
-    // application acknowledgement. It manages additional meta-data not
-    // included in the basic handler registration, most importantly info
-    // about the originating event that the user Callback (3) might want
-    // to know.
-    
-    // allocate space for handler info and copy of requesting event
-    cloud_service_send_handler_t *send_handler  = new cloud_service_send_handler_t;
-    if (!send_handler) {
-        return -ENOMEM;
+    auto timeout = millis() + timeout_ms;
+    if (timeout < timeout_ms) { // unsigned overflow
+        timeout = std::numeric_limits<system_tick_t>::max();
     }
 
-    send_handler->base_handler.cloud_flags = cloud_flags;
-    send_handler->base_handler.cb = send_cb_wrapper;
-    send_handler->base_handler.cmd[0] = '\0';
-    send_handler->base_handler.req_id = req_id;
-    send_handler->base_handler.timeout_ms = timeout_ms;
-    send_handler->base_handler.context = send_handler;
+    // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
+    // to a String and is moved around until it reaches the user callback.
+    cloud_service_ack_context context {req_id, timeout, cb, data};
+    auto publish_cb = make_shared_function([this, cloud_flags, context = std::move(context)]
+        (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
+            std::lock_guard<RecursiveMutex> lg(mutex);
 
-    send_handler->cb = cb;
-    send_handler->context = context;
-    send_handler->req_data = event;
-    if(!background_publish.publish(_writer_event_name, event,
-                                   publish_flags | PRIVATE, priority, &CloudService::publish_cb, this, send_handler))
+            if(error == Error::NONE) {
+                if(cloud_flags & CloudServicePublishFlags::FULL_ACK) {
+                    registerAckCallback(std::move(context));
+                } else {
+                    deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+                        return context.callback(CloudServiceStatus::SUCCESS, std::move(context.data));
+                    })));
+                }
+            } else if (error != Error::CANCELLED) {
+                deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+                    return context.callback(CloudServiceStatus::FAILURE, std::move(context.data));
+                })));
+            }
+            // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
+        }
+    );
+
+    if(!background_publish.publish(_writer_event_name, data,
+                                   publish_flags | PRIVATE, priority, std::move(publish_cb)))
     {
-        delete send_handler;
         rval = -EBUSY;
     }
 
     if(!rval)
     {
-        Log.info("cloud sent: %s", event);
+        Log.info("cloud sent: %s", data);
     }
 
     return rval;
@@ -417,9 +372,8 @@ int CloudService::send(const char *event,
 
 int CloudService::send(PublishFlags publish_flags, 
                     CloudServicePublishFlags cloud_flags, 
-                    cloud_service_send_cb_t cb, 
+                    cloud_service_ack_callback cb,
                     unsigned int timeout_ms, 
-                    const void *context, 
                     std::size_t priority)
 {
     int rval = 0;
@@ -445,7 +399,7 @@ int CloudService::send(PublishFlags publish_flags,
     // ensure null termination of the output json
     writer().buffer()[writer().dataSize()] = '\0';
 
-    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, context, _writer_event_name, req_id, priority);
+    rval = send(writer().buffer(), publish_flags, cloud_flags, cb, timeout_ms, _writer_event_name, req_id, priority);
 
     unlock();
     return rval;
