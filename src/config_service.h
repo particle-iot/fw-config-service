@@ -91,8 +91,8 @@ class ConfigService
         int set_cfg_cb(JSONValue *root);
         int reset_to_factory_cb(JSONValue *root);
 
-        int sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event);
-        int config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event);
+        int sync_ack_cb(CloudServiceStatus status, String&& req_event);
+        int config_sync_ack_cb(CloudServiceStatus status, String&& req_event);
 
         // process infrequent actions
         void tick_sec();

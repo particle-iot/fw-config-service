@@ -85,7 +85,7 @@ void CloudService::tick_sec()
     // timeout ack handlers
     for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
         if (ms_now > it->timeout) {
-            it->callback(CloudServiceStatus::TIMEOUT, nullptr, std::move(it->data));
+            it->callback(CloudServiceStatus::TIMEOUT, std::move(it->data));
             it = ack_handlers.erase(it);
         } else {
             ++it;
@@ -103,21 +103,21 @@ void CloudService::tick_sec()
     return req_id;
 }
 
-int CloudService::regCommand(const char *cmd, std::function<int(JSONValue *)> handler)
+int CloudService::registerCommand(const char *cmd, std::function<int(JSONValue *)> handler)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
 
-    if (!cmd || strnlen(cmd, 1 + CLOUD_MAX_CMD_LEN) > CLOUD_MAX_CMD_LEN || !handler) {
+    if (!cmd || (strnlen(cmd, 1 + CLOUD_MAX_CMD_LEN) > CLOUD_MAX_CMD_LEN) || !handler) {
         return -EINVAL;
     }
     command_handlers.push_back(std::make_pair(String(cmd), handler));
     return 0;
 }
 
-int CloudService::registerAckCallback(cloud_service_ack_data&& handler)
+int CloudService::registerAckCallback(cloud_service_ack_context&& context)
 {
     std::lock_guard<RecursiveMutex> lg(mutex);
-    ack_handlers.push_back(std::move(handler));
+    ack_handlers.push_back(std::move(context));
     return 0;
 }
 
@@ -231,7 +231,7 @@ int CloudService::dispatchCommand(String data)
     }
     for (auto it = ack_handlers.begin(); it != ack_handlers.end();) {
         if (req_id == it->req_id) {
-            rval = it->callback(CloudServiceStatus::SUCCESS, &root, std::move(it->data));
+            rval = it->callback(CloudServiceStatus::SUCCESS, std::move(it->data));
             it = ack_handlers.erase(it);
         } else {
             ++it;
@@ -287,31 +287,6 @@ int CloudService::beginResponse(const char *cmd, JSONValue &root)
     return 0;
 }
 
-void CloudService::publish_cb(
-    particle::Error error,
-    const char *event_name,
-    const char *event_data,
-    const bool full_ack_required,
-    cloud_service_ack_data&& context)
-{
-    std::lock_guard<RecursiveMutex> lg(mutex);
-
-    if(error == Error::NONE) {
-        if(full_ack_required) {
-            registerAckCallback(std::move(context));
-        } else {
-            deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
-                return context.callback(CloudServiceStatus::SUCCESS, nullptr, std::move(context.data));
-            })));
-        }
-    } else if (error != Error::CANCELLED) {
-        deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
-            return context.callback(CloudServiceStatus::FAILURE, nullptr, std::move(context.data));
-        })));
-    }
-    // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
-}
-
 int CloudService::send(const char *data,
     PublishFlags publish_flags,
     CloudServicePublishFlags cloud_flags,
@@ -359,10 +334,25 @@ int CloudService::send(const char *data,
 
     // Bind the data needed for deferred ack processing together with our publish callback. The original payload in data is copied
     // to a String and is moved around until it reaches the user callback.
-    cloud_service_ack_data send_handler {req_id, timeout, cb, data};
-    auto publish_cb = make_shared_function([this, cloud_flags, send_handler = std::move(send_handler)]
+    cloud_service_ack_context context {req_id, timeout, cb, data};
+    auto publish_cb = make_shared_function([this, cloud_flags, context = std::move(context)]
         (particle::Error error, const char *event_name, const char *event_data) mutable -> void {
-            this->publish_cb(error, event_name, event_data, cloud_flags & CloudServicePublishFlags::FULL_ACK, std::move(send_handler));
+            std::lock_guard<RecursiveMutex> lg(mutex);
+
+            if(error == Error::NONE) {
+                if(cloud_flags & CloudServicePublishFlags::FULL_ACK) {
+                    registerAckCallback(std::move(context));
+                } else {
+                    deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+                        return context.callback(CloudServiceStatus::SUCCESS, std::move(context.data));
+                    })));
+                }
+            } else if (error != Error::CANCELLED) {
+                deferred_acks.push_back(std::move(make_shared_function([context = std::move(context)] () mutable -> int {
+                    return context.callback(CloudServiceStatus::FAILURE, std::move(context.data));
+                })));
+            }
+            // particle::Error::CANCELLED is used by BackgroundPublish::cleanup()/stop() to shut down the publisher; do not retry.
         }
     );
 

@@ -50,9 +50,12 @@ enum CloudServicePublishFlags {
     FULL_ACK = 0x01 // full end-to-end acknowledgement
 };
 
-using cloud_service_ack_callback = std::function<int(CloudServiceStatus, JSONValue *, String&&)>;
+using cloud_service_ack_callback = std::function<int(CloudServiceStatus, String&&)>;
 
-struct cloud_service_ack_data {
+template<typename T>
+using cloud_service_ack_callback_ptmf = int (T::*)(CloudServiceStatus, String&&);
+
+struct cloud_service_ack_context {
     std::uint32_t req_id;
     system_tick_t timeout; // absolute time of timeout, compared against millis()
     cloud_service_ack_callback callback;
@@ -103,26 +106,26 @@ class CloudService
         template <typename T>
         int send(PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, String&&)=nullptr,
+            cloud_service_ack_callback_ptmf<T> cb=nullptr,
             T *instance=nullptr,
             uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
             std::size_t priority=0u)
         {
-            return send(publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), timeout_ms, priority);
+            return send(publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2), timeout_ms, priority);
         }
 
         template <typename T>
         int send(const char *data,
             PublishFlags publish_flags = PRIVATE,
             CloudServicePublishFlags cloud_flags = CloudServicePublishFlags::NONE,
-            int (T::*cb)(CloudServiceStatus status, JSONValue *, String&&)=nullptr,
+            cloud_service_ack_callback_ptmf<T> cb=nullptr,
             T *instance=nullptr,
             uint32_t timeout_ms=std::numeric_limits<system_tick_t>::max(),
             const char *event_name=nullptr,
             uint32_t req_id=0,
             std::size_t priority=0u)
         {
-            return send(data, publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), timeout_ms, event_name, req_id, priority);
+            return send(data, publish_flags, cloud_flags, std::bind(cb, instance, std::placeholders::_1, std::placeholders::_2), timeout_ms, event_name, req_id, priority);
         }
 
         int sendAck(JSONValue &root, int status);
@@ -135,7 +138,7 @@ class CloudService
         // process and dispatch incoming commands to registered callbacks
         int dispatchCommand(String cmd);
 
-        int regCommand(const char *name, std::function<int(JSONValue *)> handler);
+        int registerCommand(const char *name, std::function<int(JSONValue *)> handler);
 
     private:
         CloudService();
@@ -143,15 +146,7 @@ class CloudService
 
         BackgroundPublish<> background_publish;
 
-        // internal callback for non-blocking publish on the send path
-        void publish_cb(
-            particle::Error status,
-            const char *event_name,
-            const char *event_data,
-            const bool full_ack_required,
-            cloud_service_ack_data&& send_handler);
-
-        int registerAckCallback(cloud_service_ack_data&&);
+        int registerAckCallback(cloud_service_ack_context&&);
 
         // process infrequent actions
         void tick_sec();
@@ -167,7 +162,7 @@ class CloudService
 
         uint32_t last_tick_sec;
 
-        std::list<cloud_service_ack_data> ack_handlers;
+        std::list<cloud_service_ack_context> ack_handlers;
         std::list<std::pair<String, std::function<int(JSONValue *)>>> command_handlers;
         std::list<std::function<int()>> deferred_acks;
 

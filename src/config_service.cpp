@@ -165,9 +165,9 @@ ConfigService::ConfigService() :
 
 void ConfigService::init()
 {
-    CloudService::instance().regCommand("set_cfg", std::bind(&ConfigService::set_cfg_cb, this, std::placeholders::_1));
-    CloudService::instance().regCommand("get_cfg", std::bind(&ConfigService::get_cfg_cb, this, std::placeholders::_1));
-    CloudService::instance().regCommand("reset_to_factory", std::bind(&ConfigService::reset_to_factory_cb, this, std::placeholders::_1));
+    CloudService::instance().registerCommand("set_cfg", std::bind(&ConfigService::set_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().registerCommand("get_cfg", std::bind(&ConfigService::get_cfg_cb, this, std::placeholders::_1));
+    CloudService::instance().registerCommand("reset_to_factory", std::bind(&ConfigService::reset_to_factory_cb, this, std::placeholders::_1));
 
     struct stat st;
 
@@ -676,7 +676,7 @@ int ConfigService::reset_to_factory_cb(JSONValue *root)
 }
 
 // callback for ack to overall config sync with cloud (on boot)
-int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event)
+int ConfigService::sync_ack_cb(CloudServiceStatus status, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS && sync_pending)
     {
@@ -688,7 +688,7 @@ int ConfigService::sync_ack_cb(CloudServiceStatus status, JSONValue *root, Strin
 }
 
 // callback for ack to individual config sync with cloud
-int ConfigService::config_sync_ack_cb(CloudServiceStatus status, JSONValue *root, String&& req_event)
+int ConfigService::config_sync_ack_cb(CloudServiceStatus status, String&& req_event)
 {
     if(status == CloudServiceStatus::SUCCESS)
     {
