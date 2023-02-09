@@ -54,9 +54,11 @@ CloudService::CloudService() :
 {
 }
 
-void CloudService::init()
+void CloudService::init(const char *cmd)
 {
-    Particle.function("cmd", &CloudService::dispatchCommand, this);
+    // use default function name if not provided on init
+    Particle.function(cmd ? cmd : CLOUD_DEFAULT_FUNCTION_NAME,
+        &CloudService::dispatchCommand, this);
     background_publish.start();
 }
 

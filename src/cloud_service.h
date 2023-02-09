@@ -19,11 +19,16 @@
 #include "Particle.h"
 #include "BackgroundPublish.h"
 
+// default name for incoming Particle.function
+#define CLOUD_DEFAULT_FUNCTION_NAME "cmd"
+
+// JSON keys for common fields, not overridable
 #define CLOUD_KEY_CMD "cmd"
 #define CLOUD_KEY_TIME "time"
 #define CLOUD_KEY_REQ_ID "req_id"
 #define CLOUD_KEY_SRC_CMD "src_cmd"
 
+// built-in supported JSON commands, user may add more but cannot overlap
 #define CLOUD_CMD_SYNC "sync"
 #define CLOUD_CMD_ACK "ack"
 #define CLOUD_CMD_CFG "cfg"
@@ -79,7 +84,7 @@ class CloudService
             return *_instance;
         }
 
-        void init();
+        void init(const char *cmd=nullptr);
 
         // process quick actions
         void tick();
