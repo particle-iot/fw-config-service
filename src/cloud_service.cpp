@@ -200,6 +200,12 @@ int CloudService::dispatchCommand(String data)
 {
     Log.info("cloud received: %s", data.c_str());
     JSONValue root = JSONValue::parseCopy(data, data.length());
+    return _dispatchCommand(root);
+    
+}
+
+int CloudService::_dispatchCommand(JSONValue &root, bool batch)
+{
     int rval = -ENOENT;
 
     const char *cmd = nullptr;
@@ -220,6 +226,47 @@ int CloudService::dispatchCommand(String data)
     }
  
     std::lock_guard<RecursiveMutex> lg(mutex);
+
+    // allow cmds to be batched in a single request
+    // but only a single level to prevent excess recusion if user tries
+    // batch some already batched commands ad nauseum
+    if(!batch && !strncmp(cmd, CLOUD_CMD_BATCH, 1 + sizeof(CLOUD_CMD_BATCH)))
+    {   
+        JSONObjectIterator it(root);
+        // passing a single result code for multiple commands back is the main
+        // downside for batched commands
+        // amongst possibilities choose to return the final error or 0 if
+        // everything succeeded
+        int batch_rval = 0;
+
+        while(it.next())
+        {
+            if(it.name() == CLOUD_KEY_CMDS && it.value().isArray())
+            {
+                JSONArrayIterator cmd_it(it.value());
+
+                Log.info("processing batch cmd(s)");
+                
+                while(cmd_it.next())
+                {
+                    JSONValue cmd_root = cmd_it.value();
+                    int rval = _dispatchCommand(cmd_root, true);
+                    
+                    if(rval)
+                    {
+                        batch_rval = rval;
+                    }
+                }
+                break;
+            }
+            else if(it.count() == 0)
+            {
+                // at the end but didn't find any batched commands
+                batch_rval = -EINVAL;
+            }
+        }
+        return batch_rval;
+    }
 
     for (auto& [cmd_name, handler]: command_handlers) {
         if (cmd_name == cmd) {
