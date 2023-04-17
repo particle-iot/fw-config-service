@@ -44,7 +44,7 @@
 #include <list>
 #include <utility>
 
-enum CloudServiceStatus {
+enum class CloudServiceStatus {
     SUCCESS = 0,
     FAILURE, // publish to Particle cloud failed, etc
     TIMEOUT, // waiting for application response, etc

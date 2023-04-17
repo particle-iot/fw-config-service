@@ -16,6 +16,8 @@
 
 #include "Particle.h"
 
+#if HAL_PLATFORM_FILESYSTEM
+
 #include <dirent.h>
 #include <fcntl.h>
 
@@ -1029,3 +1031,5 @@ int config_get_string_cb(const char * &value, const void *context)
 
     return 0;
 }
+
+#endif // HAL_PLATFORM_FILESYSTEM
