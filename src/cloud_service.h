@@ -27,10 +27,12 @@
 #define CLOUD_KEY_TIME "time"
 #define CLOUD_KEY_REQ_ID "req_id"
 #define CLOUD_KEY_SRC_CMD "src_cmd"
+#define CLOUD_KEY_CMDS "cmds"
 
 // built-in supported JSON commands, user may add more but cannot overlap
 #define CLOUD_CMD_SYNC "sync"
 #define CLOUD_CMD_ACK "ack"
+#define CLOUD_CMD_BATCH "batch"
 #define CLOUD_CMD_CFG "cfg"
 
 #define CLOUD_MAX_CMD_LEN (32)
@@ -150,6 +152,8 @@ class CloudService
         static CloudService *_instance;
 
         BackgroundPublish<> background_publish;
+
+        int _dispatchCommand(JSONValue &root, bool batch=false);
 
         int registerAckCallback(cloud_service_ack_context&&);
 
